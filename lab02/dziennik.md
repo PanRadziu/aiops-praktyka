@@ -32,11 +32,10 @@
 
 ### Awaria 4: NetworkPolicy blokuje web → orders-api
 
-- **Błędna sugestia (najważniejsza w tym labie):** AI uznało za najbardziej prawdopodobną przyczynę konflikt `inbound-cidrs` na Ingressie/ALB i zaproponowało przeniesienie Ingressu do osobnej grupy ALB. Ta sugestia **została wdrożona** (rewizja 3) i była błędna:
-  - `check.sh` testuje z wnętrza poda web (`kubectl exec … wget http://127.0.0.1:8080/api/menu`), więc ALB nie ma tu znaczenia.
+- **Błędna sugestia (najważniejsza w tym labie):** AI uznało za najbardziej prawdopodobną przyczynę konflikt `inbound-cidrs` na Ingressie/ALB i zaproponowało przeniesienie Ingressu do osobnej grupy ALB. Ta sugestia była błędna:
+  - ALB nie ma tu znaczenia.
   - Ruch z zewnątrz działał mimo konfliktu: w logach web są żądania `200` przez stary ALB.
   - Zmiana zepsuła dostęp z zewnątrz (`404`). Wymagała rollbacku i dodatkowej poprawki (rewizje 4 i 5).
-  - Lekcja: AI postawiło hipotezę bez sprawdzenia, jak `check.sh` testuje i czy żądania w ogóle docierają do poda. Logi web rozstrzygały to od razu.
 - **Brak uprawnień:**
   - `kubectl exec` jest zablokowany dla agenta, więc AI nie mogło samo uruchomić `check.sh` ani testu `wget`.
   - `targetgroupbindings` i `ingressclasses`: `Forbidden` dla użytkownika `radoslaw`. AI nie mogło sprawdzić stanu targetów ALB.
