@@ -1,0 +1,190 @@
+name: Kantyna CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - ".github/workflows/ci.yml"
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # PR: nowszy commit anuluje stary przebieg. main: nigdy nie przerywamy wdrożenia.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  AWS_REGION: eu-central-1
+  EKS_CLUSTER: aiops
+  HELM_VERSION: v4.3.0
+  HELM_SHA256: 86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb
+
+jobs:
+  test-orders-api:
+    name: Testy orders-api
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: app/orders-api
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: app/orders-api/uv.lock
+
+      - name: Zależności (uv.lock)
+        run: uv sync --locked
+
+      - name: pytest
+        run: uv run pytest -q
+
+  test-payments:
+    name: Testy payments
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: app/payments
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: app/payments/go.mod
+          cache-dependency-path: app/payments/go.sum
+
+      - name: go test
+        run: go test ./...
+
+  build:
+    name: Build ${{ matrix.service }}
+    needs: [test-orders-api, test-payments]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read # checkout
+      id-token: write # OIDC -> rola AWS (push do ECR)
+    strategy:
+      fail-fast: true
+      matrix:
+        # Postgres (obraz publiczny) i loadgen świadomie pomijamy.
+        service: [orders-api, payments, worker, web]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: aws-actions/configure-aws-credentials@45666896f5d8e0f10ae255413f3a4cdd03bdc8f5 # v6.3.1
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@7290e214a610b32bc0eef81748948b6d466a8783 # v2.2.0
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Odpowiednik `make build push VERSION=<sha>` dla jednego serwisu.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: app/${{ matrix.service }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ vars.ECR_REGISTRY }}/kantyna/${{ matrix.service }}:${{ github.sha }}
+          build-args: |
+            APP_VERSION=${{ github.sha }}
+            APP_VARIANT=stable
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  deploy:
+    name: Wdrożenie do EKS
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Bez `environment:` — zmieniłoby `sub` tokenu OIDC, a polityka zaufania roli
+    # (infra/ci-oidc/main.tf) przyjmuje tylko ref:refs/heads/main.
+    permissions:
+      contents: read # checkout (chart)
+      id-token: write # OIDC -> rola AWS (EKS)
+    env:
+      ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
+      K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE }}
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: aws-actions/configure-aws-credentials@45666896f5d8e0f10ae255413f3a4cdd03bdc8f5 # v6.3.1
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: kubeconfig
+        run: aws eks update-kubeconfig --name "$EKS_CLUSTER" --region "$AWS_REGION"
+
+      # Przypięty Helm (nie ten z obrazu runnera), weryfikowany sumą SHA-256.
+      - name: Helm ${{ env.HELM_VERSION }}
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/helm"
+          mkdir -p "$dir"
+          curl -fsSL -o "$dir/helm.tar.gz" "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  $dir/helm.tar.gz" | sha256sum -c -
+          tar -xzf "$dir/helm.tar.gz" -C "$dir" --strip-components=1 linux-amd64/helm
+          echo "$dir" >> "$GITHUB_PATH"
+          "$dir/helm" version --short | grep -q "^${HELM_VERSION}+" \
+            || { echo "::error::Zła wersja Helma"; exit 1; }
+
+      - name: helm upgrade
+        # loadgen nie jest budowany; pinTag zostawia jego dotychczasowy tag,
+        # inaczej global.imageTag ustawiłby mu nieistniejący <sha>.
+        run: |
+          helm version --short
+          helm upgrade kantyna app/deploy/helm/kantyna \
+            --namespace "$K8S_NAMESPACE" \
+            --reuse-values \
+            --set "global.imageRegistry=$ECR_REGISTRY" \
+            --set "global.imageTag=$IMAGE_TAG" \
+            --set loadgen.image.pinTag=true
+
+      - name: rollout status
+        run: |
+          for d in orders-api payments worker web; do
+            kubectl rollout status "deployment/kantyna-$d" -n "$K8S_NAMESPACE" --timeout=5m
+          done
+
+      # Smoke test z wnętrza klastra na świeżo zbudowanym obrazie web (busybox wget),
+      # bez ciągnięcia obrazów spoza ECR.
+      - name: Smoke test /healthz
+        run: |
+          kubectl run "smoke-${IMAGE_TAG:0:12}" -n "$K8S_NAMESPACE" \
+            --image="$ECR_REGISTRY/kantyna/web:$IMAGE_TAG" \
+            --restart=Never --rm -i --quiet --pod-running-timeout=2m \
+            --command -- sh -c '
+              set -e
+              wget -qO- -T 5 http://kantyna-orders-api:8000/healthz; echo
+              wget -qO- -T 5 http://kantyna-payments:8080/healthz; echo'
+
+      - name: Obrazy w namespace
+        if: always()
+        run: kubectl get deploy -n "$K8S_NAMESPACE" -o wide
