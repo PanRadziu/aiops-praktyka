@@ -38,6 +38,9 @@ variable "eks_cluster_arn" {
 locals {
   owner = split("/", var.github_repo)[0]
   repo  = split("/", var.github_repo)[1]
+
+  # Gałęzie, z których wolno wdrażać. Release'y budujemy z release/*.
+  deploy_refs = ["main", "release/*"]
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
@@ -60,14 +63,15 @@ data "aws_iam_policy_document" "ci_trust" {
       values   = ["sts.amazonaws.com"]
     }
 
-    # Tylko gałąź main. Nowe repozytoria wysyłają sub z niezmiennymi ID:
-    # repo:<owner>@<id>/<repo>@<id>:ref:... — akceptujemy oba formaty, ID wpisane wprost.
+    # Tylko gałęzie z local.deploy_refs i tylko format sub z niezmiennymi ID:
+    # repo:<owner>@<id>/<repo>@<id>:ref:... Formatu po samej nazwie nie akceptujemy,
+    # bo repo o tej samej nazwie założone po usunięciu/przeniesieniu przejęłoby rolę.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
-        "repo:${var.github_repo}:ref:refs/heads/main",
-        "repo:${local.owner}@${var.github_owner_id}/${local.repo}@${var.github_repo_id}:ref:refs/heads/main",
+        for ref in local.deploy_refs :
+        "repo:${local.owner}@${var.github_owner_id}/${local.repo}@${var.github_repo_id}:ref:refs/heads/${ref}"
       ]
     }
   }
@@ -76,7 +80,12 @@ data "aws_iam_policy_document" "ci_trust" {
 resource "aws_iam_role" "ci" {
   name                 = "kantyna-ci"
   assume_role_policy   = data.aws_iam_policy_document.ci_trust.json
-  max_session_duration = 3600
+  max_session_duration = 7200 # build release'u z testami e2e trwa ponad godzinę
+
+  tags = {
+    app   = "kantyna"
+    owner = "platform"
+  }
 }
 
 data "aws_iam_policy_document" "ci" {
