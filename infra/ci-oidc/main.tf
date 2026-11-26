@@ -66,12 +66,10 @@ data "aws_iam_policy_document" "ci_trust" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values = flatten([
-        for ref in local.deploy_refs : [
-          "repo:${var.github_repo}:ref:refs/heads/${ref}",
-          "repo:${local.owner}@${var.github_owner_id}/${local.repo}@${var.github_repo_id}:ref:refs/heads/${ref}",
-        ]
-      ])
+      values = [
+        for ref in local.deploy_refs :
+        "repo:${local.owner}@${var.github_owner_id}/${local.repo}@${var.github_repo_id}:ref:refs/heads/${ref}"
+      ]
     }
   }
 }
@@ -79,7 +77,7 @@ data "aws_iam_policy_document" "ci_trust" {
 resource "aws_iam_role" "ci" {
   name                 = "kantyna-ci"
   assume_role_policy   = data.aws_iam_policy_document.ci_trust.json
-  max_session_duration = 7200 # build release'u z testami e2e trwa ponad godzinę
+  max_session_duration = 3600
 
   tags = {
     app   = "kantyna"
