@@ -1,0 +1,20 @@
+# PodDisruptionBudget dla orders-api (Kubernetes 1.36, policy/v1).
+# orders-api ma 2 repliki (values.yaml: ordersApi.replicaCount), bez HPA.
+# minAvailable: 1 => drain węzła może ewakuować najwyżej jeden pod naraz.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kantyna-orders-api
+  labels:
+    app.kubernetes.io/name: orders-api
+    app.kubernetes.io/instance: kantyna
+    app.kubernetes.io/component: orders-api
+    app.kubernetes.io/part-of: kantyna
+spec:
+  minAvailable: 1
+  # Niezdrowe (niegotowe) pody można ewakuować, żeby nie blokowały drainu.
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: orders-api
+      app.kubernetes.io/instance: kantyna

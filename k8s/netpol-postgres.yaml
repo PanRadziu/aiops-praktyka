@@ -1,0 +1,29 @@
+# NetworkPolicy dla Postgresa (Kubernetes 1.36, networking.k8s.io/v1).
+# Ruch przychodzący do kantyna-postgres tylko z podów orders-api
+# z tego samego namespace, tylko TCP 5432. Reszta ingress jest blokowana.
+# Probe'y Postgresa to exec (pg_isready na 127.0.0.1), więc nie potrzebują reguły.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kantyna-postgres-allow-orders-api
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/instance: kantyna
+    app.kubernetes.io/component: postgres
+    app.kubernetes.io/part-of: kantyna
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+      app.kubernetes.io/instance: kantyna
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: orders-api
+              app.kubernetes.io/instance: kantyna
+      ports:
+        - protocol: TCP
+          port: 5432
