@@ -63,17 +63,16 @@ data "aws_iam_policy_document" "ci_trust" {
       values   = ["sts.amazonaws.com"]
     }
 
-    # Tylko gałęzie z local.deploy_refs. Nowe repozytoria wysyłają sub z niezmiennymi ID:
-    # repo:<owner>@<id>/<repo>@<id>:ref:... — akceptujemy oba formaty, ID wpisane wprost.
+    # Tylko gałęzie z local.deploy_refs i tylko format sub z niezmiennymi ID:
+    # repo:<owner>@<id>/<repo>@<id>:ref:... Formatu po samej nazwie nie akceptujemy,
+    # bo repo o tej samej nazwie założone po usunięciu/przeniesieniu przejęłoby rolę.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values = flatten([
-        for ref in local.deploy_refs : [
-          "repo:${var.github_repo}:ref:refs/heads/${ref}",
-          "repo:${local.owner}@${var.github_owner_id}/${local.repo}@${var.github_repo_id}:ref:refs/heads/${ref}",
-        ]
-      ])
+      values = [
+        for ref in local.deploy_refs :
+        "repo:${local.owner}@${var.github_owner_id}/${local.repo}@${var.github_repo_id}:ref:refs/heads/${ref}"
+      ]
     }
   }
 }
