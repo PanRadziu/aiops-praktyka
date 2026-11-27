@@ -89,9 +89,11 @@ def update_pool_gauges() -> None:
     metrics.db_pool_connections_in_use.set(max(size - available, 0))
 
 
-async def ping() -> None:
+async def ping(timeout: float | None = None) -> None:
     p = _require_pool()
-    async with p.connection() as conn:
+    if timeout is None:
+        timeout = settings.db_ready_timeout_s
+    async with p.connection(timeout=timeout) as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT 1")
             await cur.fetchone()

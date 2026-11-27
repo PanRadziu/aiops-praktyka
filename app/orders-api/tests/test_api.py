@@ -162,3 +162,61 @@ def test_error_rate_flag_injects_500(client, monkeypatch):
     monkeypatch.setattr(db, "fetch_menu", fake_fetch_menu)
     resp = client.get("/api/menu")
     assert resp.status_code == 500
+
+
+def test_readyz_ok(client, monkeypatch):
+    async def fake_ping():
+        return None
+
+    monkeypatch.setattr(db, "ping", fake_ping)
+    resp = client.get("/readyz")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ready"}
+
+
+def test_readyz_returns_503_when_pool_exhausted(client, monkeypatch):
+    from psycopg_pool import PoolTimeout
+
+    async def exhausted_ping():
+        raise PoolTimeout("couldn't get a connection after 2.00 sec")
+
+    monkeypatch.setattr(db, "ping", exhausted_ping)
+    resp = client.get("/readyz")
+    assert resp.status_code == 503
+    assert resp.json() == {"status": "not_ready"}
+
+
+def test_ping_uses_short_pool_timeout(monkeypatch):
+    import asyncio
+    from contextlib import asynccontextmanager
+
+    seen = {}
+
+    class FakeCursor:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def execute(self, sql):
+            seen["sql"] = sql
+
+        async def fetchone(self):
+            return (1,)
+
+    class FakeConn:
+        def cursor(self):
+            return FakeCursor()
+
+    class FakePool:
+        @asynccontextmanager
+        async def connection(self, timeout=None):
+            seen["timeout"] = timeout
+            yield FakeConn()
+
+    monkeypatch.setattr(db, "pool", FakePool())
+    asyncio.run(db.ping())
+    assert seen["timeout"] == db.settings.db_ready_timeout_s
+    assert seen["timeout"] < 3  # kubelet readiness probe timeout
+    assert seen["sql"] == "SELECT 1"
