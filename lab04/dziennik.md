@@ -1,0 +1,11 @@
+# Lab04 — dziennik
+
+| # | Bramka / krok | Co złapała (albo co poprawiłem sam) | Poprawka |
+|---|---|---|---|
+| 1 | Krok 1, `kubectl-ai` (start) | Narzędzie od razu kończyło się błędem `unable to create log: open /tmp/kubectl-ai.log: permission denied`. Na wspólnej maszynie ten plik (i `/tmp/kubectl-ai-trace.txt`) należy do innego użytkownika z prawami `rw-r-----` | `TMPDIR=~/.cache/kubectl-ai` (kubectl-ai bierze ścieżkę logu z katalogu tymczasowego), ślad przez `--trace-path` do tego samego katalogu |
+| 2 | Krok 2, prompt dla agenta | Etykiety podów wziąłem z klastra (`kubectl get pods --show-labels`), nie z chartu. Sprawdziłem też, że z Postgresem łączy się tylko orders-api, a probe'y Postgresa to `exec` (`pg_isready` na 127.0.0.1), więc NetworkPolicy ich nie zablokuje | Selektory tylko po `app.kubernetes.io/name` + `instance`; PDB `minAvailable: 1` przy 2 replikach bez HPA |
+| 3 | Bramka `trivy config k8s/` | 0 błędnych konfiguracji w obu plikach | brak |
+| 4 | Bramka `kubectl apply --dry-run=server` / `kubectl diff` | Obiekty tylko dodawane (same `+`), nic istniejącego się nie zmienia. W PDB `status` same zera, bo w dry-run kontroler jeszcze go nie przeliczył | brak |
+| 5 | Krok 5, `terraform init` | `x509: negative serial number` przy połączeniu z registry.terraform.io. Certyfikat podstawia najpewniej korporacyjne proxy, a Go od 1.23 odrzuca ujemne numery seryjne | `GODEBUG=x509negativeserial=1 terraform init` (potrzebne tylko przy pobieraniu providera) |
+| 6 | Krok 5, `terraform plan` | `1 to add`, choć NetworkPolicy już jest w klastrze z `kubectl apply`. Stan Terraform jest pusty, a `plan` porównuje kod ze stanem, nie z klastrem. `apply` skończyłby się błędem „already exists” | Nie robię `apply`. Przejęcie obiektu: `terraform import` albo blok `import {}` |
+| 7 | Krok 5, porównanie plan ↔ klaster | Reguły (selektory, `Ingress`, TCP 5432) są identyczne, ale w żywym obiekcie brakuje etykiety `app.kubernetes.io/part-of: kantyna`, choć jest w pliku i w `last-applied-configuration`. W tej samej sekundzie co `kubectl` obiekt zapisał kontroler AWS (`manager: controller`, finalizer `networking.k8s.aws/resources`) | Do wyjaśnienia; po imporcie `plan` pokazałby `~ update in-place` z dodaniem etykiety (wykryty drift) |

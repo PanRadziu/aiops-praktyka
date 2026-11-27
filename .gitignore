@@ -1,3 +1,9 @@
 .DS_Store
 .idea/
 .vscode/
+
+# Terraform (lab04): lokalny stan i cache providerów
+tf/.terraform/
+tf/*.tfstate
+tf/*.tfstate.*
+tf/*.tfplan
